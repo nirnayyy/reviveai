@@ -2,9 +2,7 @@
 
 Autonomous revenue recovery and intelligent dunning engine built for Razorpay merchants.
 
-When recurring subscriptions fail, card transactions decline, or UPI AutoPay mandates bounce, ReviveAI diagnoses the root cause, calculates net expected recovery values ($EV$) across multiple candidate interventions, enforces deterministic policy guardrails, and executes bounded recovery actions through Razorpay Test Mode or high-fidelity simulation.
-
-![ReviveAI Architecture Overview](frontend/src/assets/hero.png)
+When subscriptions fail, card transactions decline, or UPI AutoPay mandates bounce, ReviveAI diagnoses the root cause, calculates net expected recovery values ($EV$) across candidate actions, enforces deterministic safety guardrails, and executes bounded recovery actions through Razorpay Test Mode or sandbox simulation.
 
 ```
 LLM Proposes → Deterministic Policy Authorizes → Executor Executes
@@ -13,142 +11,61 @@ LLM Proposes → Deterministic Policy Authorizes → Executor Executes
 ## System Architecture
 
 ```mermaid
-flowchart TD
-    subgraph ClientLayer ["Client & Ingestion Layer"]
-        UI["React 18 Dashboard<br/>(Vite + TypeScript)"]
-        RZP_HOOK["Razorpay Webhook Stream<br/>(payment.failed, subscription.halted)"]
-        SYNTH_IN["Batch Synthetic Generator<br/>(10,000 Heterogeneous Events)"]
-    end
-
-    subgraph Gateway ["Security & Ingestion Gateway"]
-        HMAC["HMAC-SHA256 Signature Verifier"]
-        IDEMP["Idempotency & Deduplication Engine"]
-    end
-
-    subgraph CoreEngine ["Revenue Risk & Diagnosis Subsystem"]
-        RISK["Revenue Risk Detector<br/>(Exposure, Customer LTV, Urgency Score)"]
-        DIAG["Epistemic Diagnosis Engine<br/>• Known Facts (Gateway Codes)<br/>• Inferences (Liquidity Windows)<br/>• Unknowns (Live Account Balance)"]
-    end
-
-    subgraph DecisionLayer ["Dual-Engine Decision Layer"]
-        GEMINI["Gemini 3.7 Flash Contextual Reasoner<br/>(Structured Pydantic JSON Output)"]
-        L2_PRIOR["Deterministic Statistical Prior Model<br/>(Layer 2 Fast Heuristic & Benchmark Engine)"]
-        CACHE["In-Memory Decision Cache<br/>(SHA-256 Context Hashing)"]
-    end
-
-    subgraph GuardrailLayer ["Deterministic Policy & Safety Gate"]
-        POLICY{"Policy Engine Gate"}
-        R1["Max 3 Retries per Case"]
-        R2["Min 24h Cooldown Window"]
-        R3["Hard Decline Interception (0% Retries)"]
-        R4["Autonomous Limit (<= ₹50,000)"]
-        R5["Stopping Rules (EV <= 0)"]
-    end
-
-    subgraph ExecutionLayer ["Execution & Adapter Layer"]
-        RZP_SDK["Razorpay Test Mode SDK<br/>(Payment Links, Mandate Re-auth)"]
-        SANDBOX["Sandbox Simulator<br/>(Stochastic Event Simulator)"]
-        HUMAN["Human Review Escalation Queue"]
-    end
-
-    subgraph PersistenceLayer ["Persistence & Governance"]
-        DB[("Database<br/>SQLite Local / Supabase PostgreSQL")]
-        AUDIT[("Append-Only Audit Trail<br/>(Tamper-Evident Event Log)")]
-    end
-
-    %% Flow connections
-    RZP_HOOK --> HMAC
-    SYNTH_IN --> IDEMP
-    HMAC --> IDEMP
-    IDEMP --> RISK
-    RISK --> DIAG
-
-    DIAG --> CACHE
-    CACHE -->|Cache Miss / High Value| GEMINI
-    CACHE -->|Large Batch / Fallback| L2_PRIOR
-
-    GEMINI --> POLICY
-    L2_PRIOR --> POLICY
-
-    POLICY -.-> R1 & R2 & R3 & R4 & R5
-
-    POLICY -->|Authorized| RZP_SDK
-    POLICY -->|Authorized Sim| SANDBOX
-    POLICY -->|Flagged / Exceeded| HUMAN
-
-    RZP_SDK --> DB
-    SANDBOX --> DB
-    HUMAN --> DB
-    DB --> AUDIT
-    DB --> UI
+flowchart LR
+    A["1. Ingestion<br/>Razorpay Webhook<br/>+ HMAC Verification"] --> B["2. Diagnosis & AI<br/>Root Cause Analysis<br/>+ Gemini 3.7 EV Scoring"]
+    B --> C{"3. Policy Gate<br/>Retry Limits & Cooldowns<br/>Hard Decline Block"}
+    C -->|Approved| D["4. Bounded Execution<br/>Razorpay Test SDK<br/>/ Sandbox Simulator"]
+    C -->|High Risk| E["Human Review<br/>Operator Sign-off"]
+    D --> F[("5. Audit & UI<br/>Append-Only Event Store<br/>+ React Dashboard")]
+    E --> F
 ```
 
-## Recovery Lifecycle Flow
+## Recovery Lifecycle
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Customer
-    participant RZP as Razorpay Gateway
-    participant Ingest as ReviveAI Ingestion
-    participant AI as Gemini 3.7 / Reasoner
+    participant Gateway as Razorpay Gateway
+    participant Revive as ReviveAI Engine
     participant Policy as Policy Gate
-    participant Exec as Execution Adapter
-    participant Store as Database & Audit Log
+    participant Exec as Execution & Audit
 
-    Customer->>RZP: Payment Attempt (Subscription Renewal)
-    RZP-->>Customer: Bank Decline (e.g. BAD_REQUEST_PAYMENT_CARD_EXPIRED)
-    RZP->>Ingest: Webhook `payment.failed` (with HMAC signature)
-    Ingest->>Ingest: Verify HMAC-SHA256 & Idempotency Key
-    Ingest->>AI: Build Context (Amount, LTV, Known Facts, Inferences)
-    AI->>AI: Calculate Counterfactual EVs for 8 Candidate Actions
-    AI->>Policy: Propose Optimal Action (e.g. `payment_method_update_request`)
-    alt Policy Passed (Complies with retry caps, cooldowns, limits)
-        Policy->>Exec: Dispatch Authorized Action
-        Exec->>RZP: Create Razorpay Update Link / Schedule Safe Retry
-        Exec->>Store: Record Outcome & Append to Audit Trail
-    else Policy Rejection / Safety Violation
-        Policy->>Store: Record Rejection Reason & Halt Execution
-    else High-Value Tail Risk (> ₹50,000)
-        Policy->>Store: Escalate to Human Operator Review Queue
-    end
+    Gateway->>Revive: Payment Fails (`payment.failed` webhook)
+    Revive->>Revive: Diagnose root cause & calculate Expected Value ($EV$)
+    Revive->>Policy: Propose optimal action (e.g. smart retry, payment link)
+    Policy->>Policy: Validate safety bounds (retry count ≤ 3, cooldown ≥ 24h)
+    Policy->>Exec: Dispatch approved action & record in audit log
 ```
 
-## Core Engineering Decisions
+## Core Engineering Principles
 
 ### 1. Separation of AI Proposals and Policy Authorization
-Probabilistic models should not have unconstrained execution authority over financial transactions. ReviveAI enforces an architectural airgap: Gemini analyzes multidimensional context and proposes an action with counterfactual probabilities, but the deterministic Python policy engine holds sole authority to authorize, reject, or escalate the action.
+Probabilistic models should not have unconstrained execution authority over financial transactions. Gemini analyzes the failure context and proposes an action with counterfactual probabilities, while the deterministic Python policy engine holds sole authority to authorize, reject, or escalate the action.
 
 ### 2. Epistemic Separation of Facts, Inferences, and Unknowns
-To prevent hallucinations regarding customer balances or bank conditions, input context is strictly categorized before passing to the reasoning engine:
-* **Known Facts**: Verified cryptographic payload data (e.g., error code `BAD_REQUEST_PAYMENT_CARD_EXPIRED`, failure timestamps, consecutive attempts).
-* **Inferences**: Statistical behavioral likelihoods (e.g., salary arrival between 1st–5th of the month, customer renewal history).
-* **Unknowns**: Unobservable state (e.g., live bank account balance).
+To prevent hallucinations regarding customer balances or bank conditions, input context is categorized before reasoning:
+* **Known Facts**: Verified data (error codes, failure timestamps, consecutive retry count).
+* **Inferences**: Behavioral likelihoods (salary liquidity windows, renewal history).
+* **Unknowns**: Unobservable state (live bank account balance).
 
 ### 3. Net Expected Recovery Value ($EV$) Optimization
-Candidate actions are scored by balancing gross recovery probability against operational intervention cost and customer relationship friction:
+Actions are scored by balancing gross recovery probability against operational intervention costs and customer relationship friction:
 
 $$EV = P(\text{recovery} \mid \text{context}, \text{action}) \times \text{Amount} - \text{InterventionCost} - \text{FrictionPenalty}$$
 
-* Low-friction delayed retries are prioritized for temporary banking timeouts.
-* WhatsApp and email reminders are deployed when customer action is required (e.g., updating expired cards or re-authorizing UPI mandates).
+* Low-friction delayed retries are scheduled for temporary banking timeouts.
+* WhatsApp and email update links are sent when customer action is required (expired cards, failed UPI mandates).
 * Hard declines (stolen cards, closed accounts) trigger zero retries, saving gateway fees and protecting merchant reputation.
-
-### 4. Dual-Engine Scaling Architecture
-Running 10,000 cases through a commercial LLM API introduces latency bottlenecks, rate limit exhaustion, and high token costs. ReviveAI addresses this with a tiered execution model:
-* **Layer 1 (Safety Guards)**: Deterministic policy checks.
-* **Layer 2 (Statistical Prior Engine)**: High-throughput local evaluation engine running 10,000 benchmark cases in under 1 second.
-* **Layer 3 (Gemini 3.7 Flash)**: Deep contextual reasoning for complex, high-value, or ambiguous failure events with in-memory SHA-256 decision caching.
 
 ## Benchmark Evaluation Results (10,000 Payment Events)
 
-To evaluate recovery performance under realistic conditions, ReviveAI was tested against a standard baseline (fixed 24-hour naive retry) on an identical test split of 10,000 heterogeneous payment failure events.
+ReviveAI was evaluated against a standard baseline (fixed 24-hour naive retry) on an identical test split of 10,000 heterogeneous payment failure events.
 
 ```bash
 python evaluation/run_evaluation.py --samples 10000
 ```
 
-| Metric | Baseline (Fixed Naive Retry) | ReviveAI (Adaptive Agent) | Net Difference / Lift |
+| Metric | Baseline (Fixed Retry) | ReviveAI (Adaptive Agent) | Net Difference / Lift |
 | :--- | :--- | :--- | :--- |
 | **Evaluated Events** | 10,000 | 10,000 | Identical Test Split |
 | **Total Revenue at Risk** | ₹89,646,925.57 | ₹89,646,925.57 | Baseline parity |
@@ -173,50 +90,67 @@ python evaluation/run_evaluation.py --samples 10000
 | `insufficient_funds` | 60.2% | 70.9% | ₹20,351,110.69 | **+10.7%** |
 | `bank_decline_temporary` | 77.4% | 86.4% | ₹18,413,905.10 | **+9.0%** |
 
-## Razorpay Integration & Safety Controls
+## Configuration & Free API Keys Setup
 
-* **Test Mode Enforcement**: Integrates with official Razorpay Test Mode APIs (`rzp_test_...`) for creating test payment links, customer notifications, and sandbox subscription handling.
-* **Safety Lockout**: The backend validates credentials on startup and refuses to launch if live keys (`rzp_live_...`) are configured.
-* **Webhook Signature Verification**: Incoming webhook payloads are validated using constant-time HMAC-SHA256 comparisons before processing.
+ReviveAI runs **100% free with zero cost**. You can run entirely in local sandbox mode or add free API keys for live integration:
 
-## Tech Stack
+### 1. Razorpay Test Mode Key (Optional — ₹0 Free)
+* Sign up at [https://dashboard.razorpay.com/signup](https://dashboard.razorpay.com/signup) (no bank verification needed).
+* Switch the toggle to **Test Mode** (orange badge).
+* Go to **Account & Settings** &rarr; **API Keys** and generate a test key.
+* Add to `.env`:
+  ```env
+  RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxxxx
+  RAZORPAY_KEY_SECRET=your_test_secret_here
+  RAZORPAY_WEBHOOK_SECRET=test_webhook_secret_reviveai
+  ```
 
-* **Backend**: Python 3.13, FastAPI, SQLAlchemy 2.0 (Async), Pydantic v2, aiosqlite, asyncpg
-* **AI & Reasoning**: Google Gemini 3.7 Flash (`google-genai`), Pydantic Structured JSON schema validation, Decision Caching
-* **Payment Integration**: Razorpay Python SDK, HMAC-SHA256 Webhook Ingestion
-* **Database**: SQLite (Zero-config local) / PostgreSQL (Supabase ready with migrations)
-* **Frontend**: React 18, Vite, TypeScript, Lucide Icons, Vanilla CSS
-* **Testing & Evaluation**: Pytest, Pytest-Asyncio, HTTPX
+### 2. Google Gemini API Key (Optional — ₹0 Free)
+* Get a free API key at [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+* Add to `.env`:
+  ```env
+  GEMINI_API_KEY=your_gemini_api_key
+  GEMINI_MODEL=gemini-3.7-flash
+  AI_ENABLED=true
+  ```
 
-## Quickstart Guide
+### 3. Database (Default: SQLite local, Zero setup)
+* Local SQLite runs out of the box with zero configuration: `DATABASE_URL=sqlite+aiosqlite:///./reviveai.db`.
+* For Supabase PostgreSQL, set `DATABASE_URL=postgresql+asyncpg://postgres:[PASSWORD]@db.ahufzfapqdjmwctwgcku.supabase.co:5432/postgres` and run the migration files in `backend/migrations/`.
 
-### 1. Clone & Configure
+## Quickstart
+
+### 1. Clone & Setup Environment
 ```bash
 git clone https://github.com/nirnayyy/reviveai.git
 cd reviveai
 copy .env.example .env
 ```
 
-### 2. Run Backend Server
+### 2. Run Backend
 ```bash
 python -m venv .venv
 .venv\Scripts\activate  # On Linux/macOS: source .venv/bin/activate
 pip install -r backend/requirements.txt
 uvicorn backend.app.main:app --port 8000 --reload
 ```
-Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
+OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
-### 3. Run Frontend Operations Dashboard
+### 3. Run Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Dashboard is accessible at `http://127.0.0.1:5173/`.
+Dashboard is available at `http://127.0.0.1:5173/`.
 
-### 4. Run Test Suite
+### 4. Run Tests & Evaluation
 ```bash
+# Run unit & integration test suite
 pytest
+
+# Run 10k event benchmark
+python evaluation/run_evaluation.py --samples 10000
 ```
 
 ## Repository Structure
@@ -225,8 +159,8 @@ pytest
 reviveai/
 ├── backend/
 │   ├── app/
-│   │   ├── api/             # FastAPI REST endpoints (cases, webhooks, simulation, audit)
-│   │   ├── models/          # SQLAlchemy async ORM entities
+│   │   ├── api/             # FastAPI REST routes (cases, webhooks, simulation, audit)
+│   │   ├── models/          # SQLAlchemy async ORM models
 │   │   ├── schemas/         # Pydantic schemas (AI decisions, events, policies)
 │   │   ├── services/        # AI agent, diagnosis, value model, policy engine, execution adapter
 │   │   ├── config.py        # Central configuration & test mode validation
