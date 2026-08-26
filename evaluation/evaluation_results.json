@@ -1,0 +1,103 @@
+{
+  "metadata": {
+    "evaluation_timestamp": "2026-08-26T13:15:12Z",
+    "dataset_size": 10000,
+    "execution_time_seconds": 0.62
+  },
+  "summary": {
+    "total_revenue_at_risk_inr": 89646925.57,
+    "baseline": {
+      "recovered_count": 4107,
+      "recovery_rate_pct": 41.07,
+      "recovered_amount_inr": 37439603.18,
+      "total_cost_inr": 91990.0,
+      "total_friction_inr": 221980.0,
+      "avg_attempts": 1.84
+    },
+    "reviveai": {
+      "recovered_count": 6722,
+      "recovery_rate_pct": 67.22,
+      "recovered_amount_inr": 61399308.0,
+      "total_cost_inr": 26990.0,
+      "total_friction_inr": 262265.0,
+      "avg_attempts": 1.0,
+      "policy_rejections_count": 400,
+      "hard_declines_stopped_count": 19,
+      "human_escalations_count": 272
+    },
+    "uplift": {
+      "recovery_rate_lift_pct": 26.15,
+      "recovered_revenue_lift_inr": 23959704.82,
+      "net_economic_lift_inr": 23984419.82
+    }
+  },
+  "scenario_breakdown": {
+    "expired_payment_method": {
+      "total_events": 1633,
+      "risk_amount_inr": 16715914.14,
+      "baseline_recovered_count": 0,
+      "baseline_recovery_rate_pct": 0.0,
+      "reviveai_recovered_count": 1033,
+      "reviveai_recovery_rate_pct": 63.26,
+      "reviveai_recovered_inr": 10805066.19,
+      "recovery_lift_pct": 63.26
+    },
+    "upi_mandate_failed": {
+      "total_events": 2239,
+      "risk_amount_inr": 10704038.67,
+      "baseline_recovered_count": 753,
+      "baseline_recovery_rate_pct": 33.63,
+      "reviveai_recovered_count": 1487,
+      "reviveai_recovery_rate_pct": 66.41,
+      "reviveai_recovered_inr": 6896694.09,
+      "recovery_lift_pct": 32.78
+    },
+    "insufficient_funds": {
+      "total_events": 3789,
+      "risk_amount_inr": 28347184.44,
+      "baseline_recovered_count": 2280,
+      "baseline_recovery_rate_pct": 60.17,
+      "reviveai_recovered_count": 2687,
+      "reviveai_recovery_rate_pct": 70.92,
+      "reviveai_recovered_inr": 20351110.69,
+      "recovery_lift_pct": 10.74
+    },
+    "bank_decline_temporary": {
+      "total_events": 1161,
+      "risk_amount_inr": 21593477.53,
+      "baseline_recovered_count": 899,
+      "baseline_recovery_rate_pct": 77.43,
+      "reviveai_recovered_count": 1003,
+      "reviveai_recovery_rate_pct": 86.39,
+      "reviveai_recovered_inr": 18413905.1,
+      "recovery_lift_pct": 8.96
+    },
+    "auth_abandonment": {
+      "total_events": 493,
+      "risk_amount_inr": 3414470.28,
+      "baseline_recovered_count": 175,
+      "baseline_recovery_rate_pct": 35.5,
+      "reviveai_recovered_count": 309,
+      "reviveai_recovery_rate_pct": 62.68,
+      "reviveai_recovered_inr": 2300811.86,
+      "recovery_lift_pct": 27.18
+    },
+    "bank_decline_hard": {
+      "total_events": 685,
+      "risk_amount_inr": 8871840.51,
+      "baseline_recovered_count": 0,
+      "baseline_recovery_rate_pct": 0.0,
+      "reviveai_recovered_count": 203,
+      "reviveai_recovery_rate_pct": 29.64,
+      "reviveai_recovered_inr": 2631720.07,
+      "recovery_lift_pct": 29.64
+    }
+  },
+  "failure_analysis": {
+    "unrecoverable_cases": 482,
+    "policy_rejected_actions": 400,
+    "human_escalated_cases": 272,
+    "hard_declines_intercepted": 19,
+    "explanation": "ReviveAI acknowledges that not all payment risks are recoverable (e.g. permanently cancelled cards or closed accounts). Rather than wasting merchant gateway fees and annoying cardholders with repeated blind retries, ReviveAI's safety guardrails cleanly intercept and stop futile interventions."
+  }
+}
