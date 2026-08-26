@@ -30,9 +30,13 @@ yarn-error.log*
 *.log
 logs/
 
-# IDE & OS
+# IDE, Agent & Tooling Artifacts
 .vscode/
 .idea/
+.agents/
+.gemini/
+skills-lock.json
+TODO.md
 *.swp
 *.swo
 .DS_Store

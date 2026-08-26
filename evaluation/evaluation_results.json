@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "evaluation_timestamp": "2026-08-26T13:38:44Z",
+    "evaluation_timestamp": "2026-08-26T14:00:06Z",
     "dataset_size": 10000,
-    "execution_time_seconds": 0.62
+    "execution_time_seconds": 0.69
   },
   "summary": {
     "total_revenue_at_risk_inr": 89646925.57,

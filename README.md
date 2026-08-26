@@ -177,7 +177,7 @@ Reproducible command: `python evaluation/run_evaluation.py --samples 10000`
 
 ### 1. Clone & Configure
 ```bash
-git clone <repo-url>
+git clone https://github.com/nirnayyy/reviveai.git
 cd reviveai
 copy .env.example .env
 ```
