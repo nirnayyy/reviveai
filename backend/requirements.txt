@@ -10,3 +10,4 @@ google-genai>=0.1.0
 pytest>=8.3.0
 pytest-asyncio>=0.24.0
 python-multipart>=0.0.9
+asyncpg>=0.29.0
