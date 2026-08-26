@@ -1,6 +1,8 @@
 import json
+import time
+import hashlib
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from backend.app.config import settings
 from backend.app.schemas.ai import AIDecisionSchema, CounterfactualEvaluation
 from backend.app.services.value_model import RecoveryValueModel
@@ -12,9 +14,11 @@ logger = logging.getLogger(__name__)
 
 class AIRecoveryAgent:
     """
-    AI Revenue Recovery Agent.
-    Reasons over structured customer, payment, and diagnostic context to recommend
-    optimal interventions and produce counterfactual value comparisons.
+    Tiered AI Revenue Recovery Agent.
+    - Layer 1: Deterministic safety & equation guards.
+    - Layer 2: Statistical prior scoring for 10k batch evaluation.
+    - Layer 3: Gemini 3.7 Flash contextual reasoning for edge cases & high value.
+    - Caching & Rate Budgeting to prevent wasteful API requests.
     """
 
     CANDIDATE_ACTIONS = [
@@ -28,6 +32,43 @@ class AIRecoveryAgent:
         "stop_recovery",
     ]
 
+    # In-memory Decision Cache
+    _decision_cache: Dict[str, AIDecisionSchema] = {}
+    
+    # Rate Limiting & Call Budget Trackers
+    _call_count_run: int = 0
+    _call_timestamps: List[float] = []
+
+    @classmethod
+    def _compute_cache_key(cls, case_context: Dict[str, Any], diagnosis: DiagnosisResult, risk: RiskAssessment) -> str:
+        cache_data = {
+            "category": diagnosis.category,
+            "method": case_context.get("payment_method", "card").lower(),
+            "retry_count": case_context.get("retry_count", 0),
+            "tier": risk.customer_tier,
+            "is_sub": case_context.get("is_subscription", False),
+            "is_hard_decline": diagnosis.is_hard_decline,
+            "amount_band": round(risk.amount_at_risk_inr / 1000.0) * 1000  # Band into 1k increments
+        }
+        raw = json.dumps(cache_data, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _is_rate_limited(cls) -> bool:
+        now = time.time()
+        # Clean timestamps older than 60 seconds
+        cls._call_timestamps = [t for t in cls._call_timestamps if now - t < 60.0]
+        
+        if len(cls._call_timestamps) >= settings.MAX_GEMINI_CALLS_PER_MINUTE:
+            logger.warning("Gemini per-minute call budget reached. Using deterministic heuristic fallback.")
+            return True
+            
+        if cls._call_count_run >= settings.MAX_GEMINI_CALLS_PER_RUN:
+            logger.warning("Gemini per-run call budget reached. Using deterministic heuristic fallback.")
+            return True
+            
+        return False
+
     @classmethod
     async def evaluate_case(
         cls,
@@ -37,17 +78,33 @@ class AIRecoveryAgent:
     ) -> AIDecisionSchema:
         """
         Main entry point for AI evaluation.
-        Attempts Gemini LLM generation if configured; falls back to deterministic heuristic reasoning.
+        Evaluates cache -> budget -> Gemini 3.7 Flash -> Heuristic Fallback.
         """
-        if settings.is_gemini_configured:
+        cache_key = cls._compute_cache_key(case_context, diagnosis, risk)
+
+        # 1. Check Cache
+        if settings.GEMINI_CACHE_ENABLED and cache_key in cls._decision_cache:
+            logger.info(f"Retrieved AI recovery decision from cache for category: {diagnosis.category}")
+            return cls._decision_cache[cache_key]
+
+        # 2. Check if Gemini is enabled, configured, and within budget
+        if settings.is_gemini_configured and not cls._is_rate_limited():
             try:
                 decision = await cls._generate_with_gemini(case_context, diagnosis, risk)
+                cls._call_count_run += 1
+                cls._call_timestamps.append(time.time())
+                
+                if settings.GEMINI_CACHE_ENABLED:
+                    cls._decision_cache[cache_key] = decision
+                    
                 return decision
             except Exception as e:
                 logger.warning(f"Gemini generation failed or timed out: {e}. Engaging deterministic heuristic fallback.")
-                return cls._generate_heuristic_decision(case_context, diagnosis, risk, is_fallback=True)
+                fallback_decision = cls._generate_heuristic_decision(case_context, diagnosis, risk, is_fallback=True)
+                return fallback_decision
         else:
-            return cls._generate_heuristic_decision(case_context, diagnosis, risk, is_fallback=False)
+            # Deterministic heuristic reasoner (Layer 2)
+            return cls._generate_heuristic_decision(case_context, diagnosis, risk, is_fallback=not settings.is_gemini_configured)
 
     @classmethod
     async def _generate_with_gemini(
@@ -62,7 +119,7 @@ class AIRecoveryAgent:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
         prompt = f"""
-You are ReviveAI, an expert AI revenue recovery decision system for Razorpay merchants.
+You are ReviveAI, an expert revenue recovery decision system for Razorpay merchants.
 Analyze the following payment failure context and produce a structured, high-value recovery recommendation.
 
 ### Context:
@@ -78,27 +135,46 @@ Analyze the following payment failure context and produce a structured, high-val
 - Inferred Factors: {json.dumps(diagnosis.inferred_factors)}
 - Unknown Factors: {json.dumps(diagnosis.unknown_factors)}
 
-### Rules:
-1. Do NOT execute actions. You only PROPOSE a bounded recommendation.
-2. If this is a hard decline (stolen card/account closed), recommended action MUST be 'payment_method_update_request' or 'stop_recovery'.
-3. For high-value customers (>₹50,000) or high ambiguity, consider 'escalate_to_human_review'.
-4. Provide realistic probabilities and counterfactual evaluations for alternative candidate actions.
-5. Clearly distinguish known facts from inferences and unknowns.
+### Strict Rules:
+1. You only PROPOSE a recommendation. Deterministic policy engine validates your output.
+2. If this is a hard decline (stolen card/account closed), recommended action MUST be 'payment_method_update_request' or 'stop_recovery'. Never recommend a gateway retry for hard declines.
+3. For high-value transactions (>₹50,000) or high ambiguity, set requires_human_review to true.
+4. Calculate realistic probabilities and provide full counterfactual evaluations for all candidate actions.
+5. Clearly distinguish verified known facts from statistical inferences and unknowns.
 """
 
-        response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=AIDecisionSchema,
-                temperature=0.2,
-            ),
-        )
+        # Verify model name - default to gemini-3.7-flash or fallback
+        model_name = settings.GEMINI_MODEL or "gemini-3.7-flash"
 
-        raw_text = response.text
-        data = json.loads(raw_text)
-        return AIDecisionSchema(**data)
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=AIDecisionSchema,
+                    temperature=0.2,
+                ),
+            )
+            raw_text = response.text
+            data = json.loads(raw_text)
+            return AIDecisionSchema(**data)
+        except Exception as e:
+            # If 3.7 flash identifier fails, attempt 2.5 flash fallback
+            if "not found" in str(e).lower() or "404" in str(e):
+                logger.info(f"Model {model_name} not available; falling back to gemini-2.5-flash.")
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=AIDecisionSchema,
+                        temperature=0.2,
+                    ),
+                )
+                data = json.loads(response.text)
+                return AIDecisionSchema(**data)
+            raise e
 
     @classmethod
     def _generate_heuristic_decision(
@@ -109,13 +185,12 @@ Analyze the following payment failure context and produce a structured, high-val
         is_fallback: bool = False
     ) -> AIDecisionSchema:
         """
-        Deterministic, mathematically grounded heuristic reasoning engine.
-        Produces full structured output, probabilities, and counterfactuals.
+        Deterministic, mathematically grounded statistical reasoning engine.
+        Produces full structured output, probabilities, and counterfactuals without LLM costs.
         """
         amount = risk.amount_at_risk_inr
         ltv = risk.customer_ltv_inr
         retries = case_context.get("retry_count", 0)
-        method = case_context.get("payment_method", "card").lower()
         category = diagnosis.category
 
         # Determine Primary Action & Timing & Probability based on diagnosis
@@ -218,7 +293,7 @@ Analyze the following payment failure context and produce a structured, high-val
                 reasoning = "Subsequent decline on ambiguous code. Prompting customer for alternate payment method."
                 requires_human = False
 
-        # Flag high-value transactions for human sign-off
+        # High-value transaction flag for human sign-off
         if amount > settings.AUTONOMOUS_AMOUNT_LIMIT_INR:
             requires_human = True
             reasoning += f" [NOTICE: High-value case exceeding ₹{settings.AUTONOMOUS_AMOUNT_LIMIT_INR:,.0f} flagged for human review approval]."
@@ -263,7 +338,6 @@ Analyze the following payment failure context and produce a structured, high-val
         """
         results: List[CounterfactualEvaluation] = []
 
-        # Probability heuristics for counterfactual actions
         base_probs: Dict[str, float] = {
             "delayed_retry": 0.45 if category != "bank_decline_hard" else 0.02,
             "smart_timing_retry": 0.68 if category == "insufficient_funds" else (0.50 if category != "bank_decline_hard" else 0.02),
@@ -275,7 +349,6 @@ Analyze the following payment failure context and produce a structured, high-val
             "stop_recovery": 0.0,
         }
 
-        # Ensure recommended action gets its assigned probability
         base_probs[recommended_action] = recommended_prob
 
         for action in cls.CANDIDATE_ACTIONS:
@@ -310,6 +383,5 @@ Analyze the following payment failure context and produce a structured, high-val
                 tradeoff_summary=tradeoff
             ))
 
-        # Sort descending by expected net value
         results.sort(key=lambda x: x.expected_net_value_inr, reverse=True)
         return results

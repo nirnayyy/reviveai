@@ -10,17 +10,26 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     PORT: int = 8000
     
-    # Database
+    # Database (Supports SQLite for local dev & PostgreSQL for Supabase production)
     DATABASE_URL: str = "sqlite+aiosqlite:///./reviveai.db"
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_KEY: Optional[str] = None
     
-    # Razorpay Test Mode Credentials
+    # Razorpay Test Mode Credentials (OPTIONAL for Sandbox Simulation)
+    # CRITICAL SAFETY NOTE: Only test keys (rzp_test_...) are accepted.
+    # The application will refuse to start if live keys (rzp_live_...) are configured.
     RAZORPAY_KEY_ID: Optional[str] = None
     RAZORPAY_KEY_SECRET: Optional[str] = None
     RAZORPAY_WEBHOOK_SECRET: str = "test_webhook_secret_reviveai"
     
-    # Gemini AI
+    # Gemini AI Configuration & Budgeting
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.7-flash"
+    AI_ENABLED: bool = True
+    AI_MODE: str = "DEMO"  # DEMO, EVALUATION, PRODUCTION
+    MAX_GEMINI_CALLS_PER_RUN: int = 50
+    MAX_GEMINI_CALLS_PER_MINUTE: int = 15
+    GEMINI_CACHE_ENABLED: bool = True
     
     # Policy Guardrail Defaults
     MAX_RETRIES_PER_CASE: int = 3
@@ -63,7 +72,7 @@ class Settings(BaseSettings):
 
     @property
     def is_gemini_configured(self) -> bool:
-        return bool(self.GEMINI_API_KEY and len(self.GEMINI_API_KEY.strip()) > 0)
+        return bool(self.AI_ENABLED and self.GEMINI_API_KEY and len(self.GEMINI_API_KEY.strip()) > 0)
 
 
 settings = Settings()
