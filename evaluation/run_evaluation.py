@@ -273,11 +273,14 @@ def run_evaluation(num_samples: int = 10000, output_file: str = "evaluation/eval
         }
     }
 
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(results_payload, f, indent=2)
-
-    print(f"\nSaved detailed machine-readable evaluation report to: {output_file}\n")
+    try:
+        if os.path.dirname(output_file):
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(results_payload, f, indent=2)
+        print(f"\nSaved detailed machine-readable evaluation report to: {output_file}\n")
+    except Exception as e:
+        print(f"Note: In-memory evaluation report generated (file write skipped: {e})")
     return results_payload
 
 

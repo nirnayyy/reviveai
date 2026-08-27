@@ -12,8 +12,12 @@ from backend.app.api.evaluation import router as evaluation_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize SQLite tables on startup
-    await init_db()
+    # Initialize database tables on startup safely
+    try:
+        await init_db()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Database initialization warning on startup: {e}")
     yield
 
 
