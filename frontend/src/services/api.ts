@@ -5,7 +5,11 @@ import type {
   AuditLogItem,
   EvaluationReport
 } from "../types";
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api").replace(/\/$/, "");
+const API_BASE = import.meta.env.VITE_API_BASE_URL
+  ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, "")
+  : (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
+      ? "/api"
+      : "http://localhost:8000/api");
 
 export async function fetchMetrics(): Promise<MetricsOverview> {
   const res = await fetch(`${API_BASE}/cases/metrics`);
