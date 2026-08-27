@@ -5,8 +5,7 @@ import type {
   AuditLogItem,
   EvaluationReport
 } from "../types";
-
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api").replace(/\/$/, "");
 
 export async function fetchMetrics(): Promise<MetricsOverview> {
   const res = await fetch(`${API_BASE}/cases/metrics`);
